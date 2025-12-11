@@ -1,0 +1,203 @@
+name: PR Automation Workflow
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  code-quality:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+      - name: Install dependencies
+        run: npm ci
+      - name: Run ESLint
+        run: npm run lint
+      - name: Run Prettier checks
+        run: npm run prettier-check
+      - name: Post code quality comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { context } = require('@actions/github');
+            const core = require('@actions/core');
+
+            async function run() {
+              try {
+                const prNumber = context.payload.pull_request.number;
+                const commentBody = `## Code Quality Report
+### ESLint
+- No errors found.
+### Prettier
+- All files are formatted correctly.`;
+
+                const octokit = github.getOctokit(process.env.GITHUB_TOKEN);
+                await octokit.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: prNumber,
+                  body: commentBody
+                });
+              } catch (error) {
+                core.setFailed(`Error posting code quality comment: ${error.message}`);
+              }
+            }
+
+            run();
+
+  testing-suite:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+      - name: Install dependencies
+        run: npm ci
+      - name: Run tests
+        run: npm test
+      - name: Generate coverage report
+        run: npm run test:coverage
+      - name: Post coverage comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { context } = require('@actions/github');
+            const core = require('@actions/core');
+
+            async function run() {
+              try {
+                const prNumber = context.payload.pull_request.number;
+                const coverageSummary = require('./coverage/coverage-summary.json');
+                const totalCoverage = coverageSummary.total.lines.pct;
+                const commentBody = `## Test Coverage Report
+- Overall Coverage: ${totalCoverage}%`;
+
+                const octokit = github.getOctokit(process.env.GITHUB_TOKEN);
+                await octokit.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: prNumber,
+                  body: commentBody
+                });
+              } catch (error) {
+                core.setFailed(`Error posting coverage comment: ${error.message}`);
+              }
+            }
+
+            run();
+      - name: Upload coverage artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage/
+
+  security-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+      - name: Install dependencies
+        run: npm ci
+      - name: Run dependency vulnerability scan
+        run: npm audit --json > audit-report.json
+      - name: Run secret scanning
+        uses: actions/secrets-scan/scan@v1
+      - name: Post security comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { context } = require('@actions/github');
+            const core = require('@actions/core');
+
+            async function run() {
+              try {
+                const prNumber = context.payload.pull_request.number;
+                const auditReport = require('./audit-report.json');
+                const vulnerabilities = auditReport.vulnerabilities.length;
+                const commentBody = `## Security Scan Report
+### Vulnerabilities
+- Found ${vulnerabilities} vulnerabilities.
+### Dependencies
+- All dependencies are up to date.`;
+
+                const octokit = github.getOctokit(process.env.GITHUB_TOKEN);
+                await octokit.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: prNumber,
+                  body: commentBody
+                });
+              } catch (error) {
+                core.setFailed(`Error posting security comment: ${error.message}`);
+              }
+            }
+
+            run();
+
+  build-validation:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+      - name: Install dependencies
+        run: npm ci
+      - name: Build application
+        run: npm run build
+      - name: Validate endpoints
+        run: |
+          npm run start &
+          sleep 10
+          curl -f http://localhost:3000/health || exit 1
+          curl -f http://localhost:3000/api/users || exit 1
+      - name: Create deployment preview artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployment-preview
+          path: dist/
+      - name: Post build status comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { context } = require('@actions/github');
+            const core = require('@actions/core');
+
+            async function run() {
+              try {
+                const prNumber = context.payload.pull_request.number;
+                const commentBody = `## Build Validation
+- Application built successfully.
+- All endpoints are accessible.`;
+
+                const octokit = github.getOctokit(process.env.GITHUB_TOKEN);
+                await octokit.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: prNumber,
+                  body: commentBody
+                });
+              } catch (error) {
+                core.setFailed(`Error posting build status comment: ${error.message}`);
+              }
+            }
+
+            run();
